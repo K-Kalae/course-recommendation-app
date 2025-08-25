@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
-import { submitProfile } from '../services/api';
+import React, { useEffect, useState } from 'react';
+import { sendResultsEmail, submitProfile } from '../services/api';
+import personalityTex from '../assets/personality.tex?raw';
 
 export default function CareerQuiz() {
 	const [currentStep, setCurrentStep] = useState(1);
@@ -9,45 +10,131 @@ export default function CareerQuiz() {
 	const [name, setName] = useState('');
 	const [email, setEmail] = useState('');
 
-	// Step 1: Personality (temperament) questions
-	const temperamentQuestions = useMemo(
-		() => [
-			{ id: 't1', question: 'In a new group, you usually…', options: ['Take the lead', 'Observe quietly first', 'Crack jokes and connect', 'Ask clarifying questions'] },
-			{ id: 't2', question: 'You prefer tasks that are…', options: ['Structured with clear rules', 'Open-ended and creative', 'Hands-on and practical', 'Collaborative and people-focused'] },
-			{ id: 't3', question: 'When solving problems, you…', options: ['Use logic and analytics', 'Brainstorm multiple angles', 'Prototype quickly', 'Discuss with others'] },
-			{ id: 't4', question: 'You gain energy from…', options: ['Building/tech tinkering', 'Art/design/content', 'Helping/teaching others', 'Planning/organizing'] },
-			{ id: 't5', question: 'Under pressure, you…', options: ['Focus and optimize', 'Innovate a new approach', 'Rally the team', 'Document and prioritize'] },
-		],
-		[]
-	);
+	// Step 1: Personality questions from LaTeX file
+	const [temperamentQuestions, setTemperamentQuestions] = useState([]);
+	const [loadingQuestions, setLoadingQuestions] = useState(false);
+	useEffect(() => {
+		setLoadingQuestions(true);
+		try {
+			// Parse blocks like: \item Question ... \begin{enumerate}[label=(\Alph*)] ... \item Opt ... \end{enumerate}
+			const blocks = [];
+			const blockRegex = /\\item\s+([\s\S]*?)\\begin\{enumerate\}\[[^\]]*\]([\s\S]*?)\\end\{enumerate\}/g;
+			let match;
+			let idx = 0;
+			while ((match = blockRegex.exec(personalityTex)) !== null) {
+				const rawQuestion = match[1].trim().replace(/\n+/g, ' ');
+				const optionsBlock = match[2];
+				const optionRegex = /\\item\s+(.+?)\n/g;
+				const opts = [];
+				let optMatch;
+				let letterCode = 65; // 'A'
+				while ((optMatch = optionRegex.exec(optionsBlock)) !== null) {
+					const label = optMatch[1].trim();
+					const value = String.fromCharCode(letterCode);
+					opts.push({ label, value });
+					letterCode += 1;
+				}
+				if (rawQuestion && opts.length > 0) {
+					blocks.push({ id: `q_${idx + 1}`, question: rawQuestion, options: opts });
+					idx += 1;
+				}
+			}
+			setTemperamentQuestions(blocks);
+		} catch (e) {
+			setTemperamentQuestions([]);
+		} finally {
+			setLoadingQuestions(false);
+		}
+	}, []);
 	const [temperamentAnswers, setTemperamentAnswers] = useState({});
 
-	// Step 2: Scores upload + strengths
-	const [scores, setScores] = useState({ math: '', english: '', science: '', arts: '' });
+	// Step 2: Scores (Kenyan education subjects)
+	const [scores, setScores] = useState({
+		math: '',
+		english: '',
+		kiswahili: '',
+		biology: '',
+		physics: '',
+		chemistry: '',
+		geography: '',
+		history: '',
+		business_studies: '',
+		computer_science: '',
+	});
 	const [scoresFile, setScoresFile] = useState(null);
-	const [strengths, setStrengths] = useState([]);
-	const strengthOptions = ['Analytical', 'Creative', 'Leadership', 'Communication', 'Empathy', 'Problem-Solving', 'Attention to Detail'];
 
 	// Step 3: Interests / passions
 	const [interests, setInterests] = useState([]);
-	const interestOptions = ['Software/AI', 'Design/Media', 'Entrepreneurship', 'Healthcare', 'Education', 'Engineering', 'Environment'];
+	const interestOptions = [
+		'Healthcare & Helping People (medicine, nursing, pharmacy)',
+		'Science & Research (biology, chemistry, physics, labs)',
+		'Technology & Computing (coding, AI, robotics, IT)',
+		'Engineering & Problem-Solving (building, designing, innovation)',
+		'Mathematics & Analytics (data, finance, statistics)',
+		'Business & Entrepreneurship (leadership, startups, sales)',
+		'Law, Justice & Governance (law, politics, public policy)',
+		'Arts & Design (visual arts, graphics, fashion, creative design)',
+		'Media & Communication (journalism, public relations, film, content creation)',
+		'Education & Mentorship (teaching, training, coaching)',
+		'Social Sciences & Community Work (psychology, sociology, social work)',
+		'Environment & Sustainability (agriculture, climate, conservation)',
+		'Travel & Hospitality (tourism, hotel management, customer service)',
+		'Sports & Physical Wellness (athletics, physiotherapy, fitness, coaching)'
+	];
 
 	const [submitting, setSubmitting] = useState(false);
 	const [result, setResult] = useState(null);
 	const [error, setError] = useState('');
+	const [sending, setSending] = useState(false);
+	const [sendMsg, setSendMsg] = useState('');
+	const [primaryTemperament, setPrimaryTemperament] = useState(null);
+	const [temperamentBreakdown, setTemperamentBreakdown] = useState(null);
 
-	const progressPercent = useMemo(() => Math.round((currentStep / totalSteps) * 100), [currentStep]);
+	const progressPercent = Math.round((currentStep / totalSteps) * 100);
 
 	function toggleArrayValue(list, value) {
 		return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 	}
 
+	function computeTemperament() {
+		const counts = { A: 0, B: 0, C: 0, D: 0 };
+		Object.values(temperamentAnswers).forEach((val) => {
+			if (val === 'A') counts.A += 1;
+			else if (val === 'B') counts.B += 1;
+			else if (val === 'C') counts.C += 1;
+			else if (val === 'D') counts.D += 1;
+		});
+		const total = Math.max(1, temperamentQuestions.length);
+		const perc = {
+			Sanguine: Math.round((counts.A / total) * 100),
+			Choleric: Math.round((counts.B / total) * 100),
+			Melancholic: Math.round((counts.C / total) * 100),
+			Phlegmatic: Math.round((counts.D / total) * 100),
+		};
+		const entries = [
+			['Sanguine', perc.Sanguine],
+			['Choleric', perc.Choleric],
+			['Melancholic', perc.Melancholic],
+			['Phlegmatic', perc.Phlegmatic],
+		].sort((a, b) => b[1] - a[1]);
+		const primary = entries[0][0];
+		const secondary = entries[1][1] > 0 ? entries[1][0] : null;
+		const combined = secondary ? `${primary}-${secondary}` : primary;
+		return { primary: combined, percents: perc };
+	}
+
 	function canContinueFromStep(step) {
 		if (step === 1) {
-			return name.trim() && email.trim() && Object.keys(temperamentAnswers).length === temperamentQuestions.length;
+			return (
+				name.trim() &&
+				email.trim() &&
+				temperamentQuestions.length > 0 &&
+				Object.keys(temperamentAnswers).length === temperamentQuestions.length
+			);
 		}
 		if (step === 2) {
-			return strengths.length > 0 || Object.values(scores).some((v) => String(v).trim() !== '') || Boolean(scoresFile);
+			// allow continuing if at least one score entered or a file uploaded
+			return Object.values(scores).some((v) => String(v).trim() !== '') || Boolean(scoresFile);
 		}
 		if (step === 3) {
 			return interests.length > 0;
@@ -60,12 +147,17 @@ export default function CareerQuiz() {
 		if (!canContinueFromStep(3)) return;
 		setSubmitting(true);
 		try {
+			const t = computeTemperament();
+			setPrimaryTemperament(t.primary);
+			setTemperamentBreakdown(t.percents);
 			const payload = {
 				name,
 				email,
 				temperament_answers: temperamentAnswers,
+				temperament_primary: t.primary,
+				temperament_breakdown: t.percents,
 				scores,
-				strengths,
+				strengths: [],
 				interests,
 				scores_file_name: scoresFile?.name || null,
 			};
@@ -84,28 +176,41 @@ export default function CareerQuiz() {
 		setName('');
 		setEmail('');
 		setTemperamentAnswers({});
-		setScores({ math: '', english: '', science: '', arts: '' });
+		setScores({
+			math: '',
+			english: '',
+			kiswahili: '',
+			biology: '',
+			physics: '',
+			chemistry: '',
+			geography: '',
+			history: '',
+			business_studies: '',
+			computer_science: '',
+		});
 		setScoresFile(null);
-		setStrengths([]);
 		setInterests([]);
 		setResult(null);
 		setError('');
+		setSendMsg('');
+		setPrimaryTemperament(null);
+		setTemperamentBreakdown(null);
 	}
 
 	return (
 		<div className="container-page py-8">
 			<div className="mb-6">
 				<div className="flex items-center justify-between mb-2">
-					<h1 className="text-2xl font-bold">Career Path Wizard</h1>
-					<span className="text-sm text-gray-500">Step {Math.min(currentStep, 3)} of {totalSteps}</span>
+					<h1 className="text-2xl font-bold">Assessment</h1>
+					<span className="text-sm text-gray-600">Step {Math.min(currentStep, 3)} of {totalSteps}</span>
 				</div>
 				<div className="w-full bg-gray-200 rounded-full h-2">
-					<div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${Math.min(progressPercent, 100)}%` }} />
+					<div className="bg-blue-700 h-2 rounded-full transition-all" style={{ width: `${Math.min(progressPercent, 100)}%` }} />
 				</div>
 				<div className="mt-3 grid grid-cols-3 text-center text-sm">
-					<div className={`font-medium ${currentStep >= 1 ? 'text-blue-600' : 'text-gray-500'}`}>Personality</div>
-					<div className={`font-medium ${currentStep >= 2 ? 'text-blue-600' : 'text-gray-500'}`}>Scores & Strengths</div>
-					<div className={`font-medium ${currentStep >= 3 ? 'text-blue-600' : 'text-gray-500'}`}>Interests</div>
+					<div className={`font-medium ${currentStep >= 1 ? 'text-blue-700' : 'text-gray-500'}`}>Personality</div>
+					<div className={`font-medium ${currentStep >= 2 ? 'text-blue-700' : 'text-gray-500'}`}>Scores</div>
+					<div className={`font-medium ${currentStep >= 3 ? 'text-blue-700' : 'text-gray-500'}`}>Interests</div>
 				</div>
 			</div>
 
@@ -126,18 +231,32 @@ export default function CareerQuiz() {
 						</div>
 					</div>
 
-					<div className="space-y-5">
-						{temperamentQuestions.map((q) => (
-							<div key={q.id}>
-								<p className="font-medium mb-2">{q.question}</p>
-								<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-									{q.options.map((opt) => (
-										<button key={opt} type="button" onClick={() => setTemperamentAnswers((prev) => ({ ...prev, [q.id]: opt }))} className={`px-4 py-2 border rounded-md text-left transition-colors ${temperamentAnswers[q.id] === opt ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-100'}`}>{opt}</button>
-									))}
+					{loadingQuestions ? (
+						<p className="text-sm text-gray-500">Loading questions…</p>
+					) : (
+						<div className="space-y-5">
+							{temperamentQuestions.map((q) => (
+								<div key={q.id}>
+									<p className="font-medium mb-2">{q.question}</p>
+									<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+										{q.options.map((opt) => {
+											const selected = temperamentAnswers[q.id] === opt.value;
+											return (
+												<button
+													key={`${q.id}-${opt.value}`}
+													type="button"
+													onClick={() => setTemperamentAnswers((prev) => ({ ...prev, [q.id]: opt.value }))}
+													className={`px-4 py-2 border rounded-md text-left transition-colors ${selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-100'}`}
+												>
+													{opt.label}
+												</button>
+											);
+										})}
+									</div>
 								</div>
-							</div>
-						))}
-					</div>
+							))}
+						</div>
+					)}
 
 					<div className="flex justify-end gap-3">
 						<button disabled={!canContinueFromStep(1)} onClick={() => setCurrentStep(2)} className={`px-5 py-2 rounded-md text-white ${canContinueFromStep(1) ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'}`}>Continue</button>
@@ -158,20 +277,11 @@ export default function CareerQuiz() {
 							<div className="grid grid-cols-2 gap-3">
 								{Object.entries(scores).map(([k, v]) => (
 									<label key={k} className="text-sm">
-										<span className="text-gray-700 capitalize">{k}</span>
+										<span className="text-gray-700 capitalize">{k.replace('_', ' ')}</span>
 										<input type="number" min="0" max="100" value={v} onChange={(e) => setScores((prev) => ({ ...prev, [k]: e.target.value }))} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="e.g. 85" />
 									</label>
 								))}
 							</div>
-						</div>
-					</div>
-
-					<div>
-						<h3 className="font-semibold mb-2">Select your strengths</h3>
-						<div className="flex flex-wrap gap-2">
-							{strengthOptions.map((opt) => (
-								<button key={opt} type="button" onClick={() => setStrengths((prev) => toggleArrayValue(prev, opt))} className={`px-3 py-1 rounded-full border ${strengths.includes(opt) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-100'}`}>{opt}</button>
-							))}
 						</div>
 					</div>
 
@@ -203,6 +313,16 @@ export default function CareerQuiz() {
 			{currentStep === 4 && result && (
 				<section className="bg-white rounded-lg shadow p-8 text-center">
 					<h2 className="text-3xl font-bold mb-4">Your Ideal Path</h2>
+					{primaryTemperament ? (
+						<div className="mb-6">
+							<p className="text-xl"><strong>Primary Temperament:</strong> {primaryTemperament}</p>
+							{temperamentBreakdown ? (
+								<p className="text-sm text-gray-600 mt-1">
+									Sanguine {temperamentBreakdown.Sanguine}% • Choleric {temperamentBreakdown.Choleric}% • Melancholic {temperamentBreakdown.Melancholic}% • Phlegmatic {temperamentBreakdown.Phlegmatic}%
+								</p>
+							) : null}
+						</div>
+					) : null}
 					{result?.recommendation ? (
 						<div className="space-y-2">
 							<p className="text-xl"><strong>Suggested Career:</strong> {result.recommendation.career}</p>
@@ -212,9 +332,29 @@ export default function CareerQuiz() {
 					) : (
 						<p className="text-gray-700">Thanks! Your profile has been saved.</p>
 					)}
-					<div className="mt-8 flex justify-center gap-3">
-						<button onClick={resetAll} className="px-5 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Start over</button>
-						<a href="/" className="px-5 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">Go Home</a>
+					<div className="mt-8 flex flex-col items-center gap-3">
+						<div className="flex gap-3">
+							<button onClick={resetAll} className="px-5 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Start over</button>
+							<a href="/" className="px-5 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">Go Home</a>
+						</div>
+						<div className="flex items-center gap-2">
+							<button disabled={sending} onClick={async () => {
+								if (!email) return;
+								setSendMsg('');
+								setSending(true);
+								try {
+									await sendResultsEmail(email, result?.recommendation || null);
+									setSendMsg('Sent! Check your inbox.');
+								} catch (e) {
+									setSendMsg('Failed to send email.');
+								} finally {
+									setSending(false);
+								}
+							}} className={`px-5 py-2 rounded-md ${sending ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'} text-white`}>
+								{sending ? 'Sending…' : 'Send results to my email'}
+							</button>
+							{sendMsg ? <span className="text-sm text-gray-600">{sendMsg}</span> : null}
+						</div>
 					</div>
 				</section>
 			)}
